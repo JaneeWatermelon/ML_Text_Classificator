@@ -5,6 +5,9 @@ import numpy as np
 import core.vars as vars
 import core.base as base
 import os
+from collections import Counter
+
+from nltk import WordPunctTokenizer
 
 import matplotlib.pyplot as plt
 
@@ -14,10 +17,7 @@ from gensim.models import KeyedVectors
 from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve
 from sklearn.model_selection import train_test_split
 
-def naive_baies(texts: pd.Series, targets: pd.Series, delta: float=0.1) -> pd.Series:
-    # Предобработка текста
-    tokens, vocabulary = base.text_preprocessor(texts=texts, min_freq=1)
-
+def naive_baies(texts: pd.Series, targets: pd.Series, vocabulary: dict[str, int], delta: float=0.1) -> pd.Series:
     voc_set = set(vocabulary.keys())
 
     # Априорная вероятность классов
@@ -27,8 +27,8 @@ def naive_baies(texts: pd.Series, targets: pd.Series, delta: float=0.1) -> pd.Se
     # Регуляризация через delta
     posterior_probability = posterior_probability.map(lambda x: x + delta)
 
-    for i in range(len(tokens)):
-        document = tokens.iloc[i]
+    for i in range(len(texts)):
+        document = texts.iloc[i]
         target = targets.iloc[i]
 
         for word in document.split():
@@ -43,9 +43,12 @@ def naive_baies(texts: pd.Series, targets: pd.Series, delta: float=0.1) -> pd.Se
 
     # Предсказываем класс
     pred_targets_values = []
+    y_true_all = []
+    y_score_all = []
 
-    for i in range(len(tokens)):
-        document = tokens.iloc[i]
+    for i in range(len(texts)):
+        document = texts.iloc[i]
+        
         words = [word if word in voc_set else vars.UNK_VAL for word in document.split()]
 
         prediction = pd.Series(index=prior_probability.index, data=0.0)
@@ -65,16 +68,19 @@ def naive_baies(texts: pd.Series, targets: pd.Series, delta: float=0.1) -> pd.Se
         # Выбираем наиболее вероятный класс для данного текста
         pred_k = prior_probability.index[prediction.argmax()]
 
-        print(words)
-        print(prediction.sort_values(ascending=False))
-        print(pred_k)
+        # print(words)
+        # print(prediction.sort_values(ascending=False))
+        # print(pred_k)
 
         pred_targets_values.append(pred_k)
+
+        y_true_all.append(targets.iloc[i])
+        y_score_all.append(prediction[1])
 
     # Строим результирующее предсказание для выборки
     pred_targets = pd.Series(pred_targets_values)
 
-    return pred_targets
+    return pred_targets, y_true_all, y_score_all
 
 class VanillaRNN:
     def __init__(self, input_size: int, hidden_size: int, output_size: int, alpha: float=1e-2):
@@ -197,13 +203,20 @@ class BiRNNClassifier:
 
         return dh[:self.hidden_size], dh[self.hidden_size:]
 
-def check_naive_baies(texts: pd.Series, targets: pd.Series):
-    pred_targets = naive_baies(texts=texts, targets=targets)
+def check_naive_baies(texts: pd.Series, targets: pd.Series, vocabulary: dict[str, int]):
+    pred_targets, y_true_all, y_score_all = naive_baies(texts=texts, targets=targets, vocabulary=vocabulary)
 
     print(pd.concat([targets, pred_targets], axis=1))
 
     # Сверяем эталон с нашими предсказаниями
     print(accuracy_score(targets, y_pred=pred_targets))
+
+    # Вывод ROC-AUC
+    roc_auc = roc_auc_score(y_true_all, y_score_all)
+    print(f"ROC-AUC (Naive Baies): {roc_auc:.4f}")
+
+    # Визуализация ROC кривой
+    show_roc_curve(y_true_all, y_score_all, roc_auc)
 
 def get_vocabulary(by: str="download") -> tuple[typing.Any, int]:
     if by == "download":
@@ -286,7 +299,7 @@ def show_roc_curve(y_true_all, y_score_all, roc_auc):
 def check_vanilla_rnn(texts: pd.Series, targets: pd.Series):
     print("VanillaRNN")
 
-    vocabulary, vector_size = get_vocabulary(by="preload")
+    vocabulary, vector_size = get_vocabulary(by="download")
 
     # Настраиваем гиперпараметры
     input_size = vector_size
@@ -300,18 +313,14 @@ def check_vanilla_rnn(texts: pd.Series, targets: pd.Series):
     # Разбиваем выборку на тренировочную и проверочную
     train_texts, test_texts, train_targets, test_targets = train_test_split(texts, targets, test_size=0.2)
 
-    # Предобработка текста
-    train_texts_cleared, _ = base.text_preprocessor(texts=train_texts, min_freq=1)
-    test_texts_cleared, _ = base.text_preprocessor(texts=test_texts, min_freq=1)
-
     # Получаем ембеддинги для слов
     train_tokens = get_vec_tokens(
-        texts=train_texts_cleared,
+        texts=train_texts,
         vocabulary=vocabulary,
         vector_size=vector_size
     )
     test_tokens = get_vec_tokens(
-        texts=test_texts_cleared,
+        texts=test_texts,
         vocabulary=vocabulary,
         vector_size=vector_size
     )
@@ -349,7 +358,7 @@ def check_vanilla_rnn(texts: pd.Series, targets: pd.Series):
     # Начинаем обучение
     for epoch in range(n_epoches):
         epoch_losses = [] 
-        for i in range(len(train_texts_cleared)):
+        for i in range(len(train_texts)):
             y_true = train_targets.iloc[i]
             y_true_idx = classes[classes == y_true].index
             xs = train_tokens[i]
@@ -383,7 +392,7 @@ def check_vanilla_rnn(texts: pd.Series, targets: pd.Series):
 
     print("y_pred")
 
-    for i in range(len(test_texts_cleared)):
+    for i in range(len(test_texts)):
         xs = test_tokens[i]
 
         h_T_forward = rnn_forward.forward(xs)
@@ -421,7 +430,12 @@ if __name__ == "__main__":
 
     texts = data['comment_text']
     targets = data['should_ban']
+
+    # Предобработка текста
+    texts_cleared, vocabulary = base.text_preprocessor(texts=texts, min_freq=1)
+
+    check_naive_baies(texts_cleared, targets, vocabulary)
     
-    check_vanilla_rnn(texts, targets)
+    check_vanilla_rnn(texts_cleared, targets)
 
     

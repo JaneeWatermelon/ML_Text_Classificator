@@ -7,6 +7,11 @@ from nltk import WordPunctTokenizer
 
 import core.vars as vars
 
+def softmax(x):
+    x = x - np.max(x)
+    exp = np.exp(x)
+    return exp / np.sum(exp)
+
 def text_preprocessor(texts: pd.Series, min_freq: int=5) -> tuple[pd.Series, dict[str, int]]:
     tokenizer = WordPunctTokenizer()
 
@@ -22,7 +27,7 @@ def text_preprocessor(texts: pd.Series, min_freq: int=5) -> tuple[pd.Series, dic
         # texts[i] = text
 
         text = re.sub(r'[.,´’!?;:"\'()\[\]{}<>«»„“”\-–—/\\|@#$%^&*_+=~→`]', ' ', text)
-        text = re.sub(r'[ \t]+', ' ', text)  # Множественные пробелы/табы → один пробел
+        text = re.sub(r'[ \t]+', ' ', text)  # Множественные пробелы/табы - один пробел
         text = re.sub(r'\n[ \t]+\n', '\n\n', text)  # Убираем пробелы между переносами
         text = text.lower()
 
